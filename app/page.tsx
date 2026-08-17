@@ -39,13 +39,15 @@ type Reply = {
   createdAt?: Timestamp | null;
 };
 
+const publicBasePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
+
 const sampleCharacter: Character = {
   id: "sample-ante-holstein",
   alias: "Ante Holstein",
   ownerName: "@Kkyareuk_",
   tags: ["캐릭터", "첫인상"],
   category: "SF",
-  imageUrl: "/characters/ante-holstein.png",
+  imageUrl: `${publicBasePath}/characters/ante-holstein.png`,
   visibility: "public",
   isSample: true,
 };
@@ -294,6 +296,15 @@ export default function Home() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
+  const copyShareLink = async (characterId: string) => {
+    const shareUrl = new URL(window.location.href);
+    shareUrl.hash = "";
+    shareUrl.search = "";
+    shareUrl.searchParams.set("character", characterId);
+    await navigator.clipboard.writeText(shareUrl.toString());
+    notify("첫인상 링크를 복사했어요.");
+  };
+
   const pickImage = (file?: File) => {
     if (!file) return;
     if (!file.type.startsWith("image/")) {
@@ -527,7 +538,7 @@ export default function Home() {
                   {activeCharacter && (
                     <article className="character-summary">
                       <CharacterImage character={activeCharacter} />
-                      <div className="summary-head"><span>공개 중</span><button type="button" onClick={() => { void navigator.clipboard.writeText(`${window.location.origin}/?character=${activeCharacter.id}`); notify("첫인상 링크를 복사했어요."); }}>링크 복사 ↗</button></div>
+                      <div className="summary-head"><span>공개 중</span><button type="button" onClick={() => void copyShareLink(activeCharacter.id)}>링크 복사 ↗</button></div>
                       <h2>{activeCharacter.alias}</h2>
                       <div className="tag-row">{activeCharacter.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div>
                     </article>

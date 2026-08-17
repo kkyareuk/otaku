@@ -13,6 +13,31 @@
 - PC와 모바일 레이아웃
 - Firebase 미설정 상태에서 가짜 성공 화면 대신 명확한 설정 안내
 
+## GitHub Pages에 실제 사이트 올리기
+
+이 프로젝트는 `README.md`를 직접 게시하는 방식이 아니라 GitHub Actions가 Next.js를 실제 HTML로 빌드해 배포합니다.
+
+1. 이 프로젝트의 파일과 폴더를 GitHub 저장소 최상단에 모두 올립니다. 특히 `.github/workflows/deploy-pages.yml`, `app`, `public`, `package.json`이 있어야 합니다.
+2. GitHub 저장소의 Settings > Pages로 이동합니다.
+3. Build and deployment의 Source를 `GitHub Actions`로 선택합니다.
+4. 저장소의 Actions 탭에서 `Deploy GitHub Pages` 작업이 완료될 때까지 기다립니다.
+5. 완료 후 Settings > Pages에 표시되는 주소로 접속합니다.
+
+저장소 이름이 `otaku`라면 주소가 `https://아이디.github.io/otaku/` 형태여도 이미지와 스크립트 경로가 자동으로 맞춰집니다.
+
+Google 로그인까지 활성화하려면 저장소의 Settings > Secrets and variables > Actions에서 다음 이름으로 Repository secret 6개를 추가합니다.
+
+    NEXT_PUBLIC_FIREBASE_API_KEY
+    NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
+    NEXT_PUBLIC_FIREBASE_PROJECT_ID
+    NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
+    NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID
+    NEXT_PUBLIC_FIREBASE_APP_ID
+
+값은 Firebase Console의 프로젝트 설정 > 내 앱 > SDK 설정 및 구성에서 확인합니다. 값을 추가한 뒤 Actions 탭에서 `Deploy GitHub Pages`를 다시 실행합니다.
+
+Firebase Console의 Authentication > Settings > Authorized domains에는 경로를 제외한 `아이디.github.io` 도메인을 추가합니다.
+
 ## 로컬 실행
 
 Node.js 22.13 이상과 pnpm을 사용합니다.
