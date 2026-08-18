@@ -1,5 +1,7 @@
 import { getApp, getApps, initializeApp } from "firebase/app";
 import { browserLocalPersistence, getAuth, setPersistence } from "firebase/auth";
+import { getFirestore } from "firebase/firestore";
+import { getStorage } from "firebase/storage";
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -23,4 +25,12 @@ export function getFirebaseAuth() {
   const auth = getAuth(app);
   void setPersistence(auth, browserLocalPersistence);
   return auth;
+}
+
+export function getFirebaseServices() {
+  if (!firebaseConfigured || typeof window === "undefined") return null;
+  const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  void setPersistence(auth, browserLocalPersistence);
+  return { auth, db: getFirestore(app), storage: getStorage(app) };
 }
