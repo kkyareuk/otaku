@@ -37,6 +37,9 @@
     "**/*.mts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "deliverables",
+    "오타쿠놀이터-GitHub-ready",
+    "lib/firebase.ts"
   ]
 }

@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000").replace(/\/$/, "");
-const title = "오타쿠놀이터 | 익명 캐릭터 첫인상";
-const description = "내 자캐의 첫인상을 익명으로 모으고, 예상 밖의 관계성과 설정을 발견하세요.";
+const title = "오타쿠놀이터 | 취향이 놀거리가 되는 곳";
+const description = "오타쿠형 월드컵, 초간단 테스트 제작기, 자캐 관계도와 룰렛까지 한곳에서 만들고 즐겨보세요.";
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
