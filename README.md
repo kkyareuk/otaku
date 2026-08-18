@@ -1,12 +1,14 @@
 # 오타쿠놀이터
 
-월드컵, 테스트, 자캐 놀이와 연성 소재 추첨을 한곳에서 즐기는 오타쿠 콘텐츠 플랫폼입니다.
+월드컵, 고급 성향 테스트, 자캐 놀이와 연성 소재 추첨을 한곳에서 즐기는 오타쿠 콘텐츠 플랫폼입니다.
 
 ## 현재 들어 있는 기능
 
-- 아이디와 닉네임을 만드는 브라우저 로컬 프로필
+- Firebase Authentication의 실제 Google 계정 로그인
 - 참가자 이름·설명·이미지를 등록하고 실제 대결과 우승 결과까지 진행하는 월드컵 제작기
-- 질문·A/B 선택지·결과를 등록하고 실제로 풀어 보는 테스트 제작기
+- 선택지를 원하는 만큼 추가하는 테스트 제작기
+- 선택지마다 제작자만 볼 수 있는 복수 변수와 점수 연결
+- 결과 변수를 직접 만드는 방식과 E/I·S/N·T/F·J/P를 계산하는 MBTI 방식
 - 장르·관계·분위기·장소·사건·대사를 조합하는 연성 소재 추첨기
 - 자캐 프로필·첫인상·관계도·케미·가챠·빙고·팔레트 콘텐츠
 - 콘텐츠 종류와 템플릿 선택
@@ -17,7 +19,7 @@
 - PC와 모바일 반응형 화면
 - GitHub Pages 정적 배포
 
-프로필과 초안은 사용 중인 브라우저의 로컬 저장소에 보관됩니다. 서버 계정이 아니므로 다른 기기와 자동으로 동기화되지는 않습니다.
+Google 로그인은 실제 Firebase 사용자 계정을 사용합니다. 현재 콘텐츠 초안은 사용 중인 브라우저에 저장되며, 다른 기기 동기화와 공개 커뮤니티 게시물은 Firestore 연결 단계에서 활성화할 수 있습니다.
 
 ## 로컬 실행
 
@@ -41,10 +43,32 @@ pnpm dev
 
 저장소 이름이 `otaku`라면 배포 주소는 `https://아이디.github.io/otaku/` 형식입니다.
 
+## 실제 Google 로그인 연결
+
+이 프로젝트의 로그인 버튼은 Firebase `signInWithPopup`에 연결되어 있습니다. 화면만 흉내 낸 버튼이 아닙니다. 다만 Firebase 프로젝트 값은 소유자가 직접 발급해야 하므로 저장소에 임의 값은 넣지 않았습니다.
+
+1. [Firebase Console](https://console.firebase.google.com/)에서 프로젝트와 웹 앱을 만듭니다.
+2. **Authentication > Sign-in method**에서 Google을 활성화합니다.
+3. **Authentication > Settings > Authorized domains**에 `kkyareuk.github.io`를 추가합니다.
+4. 프로젝트 설정의 웹 앱 구성값을 확인합니다.
+5. GitHub 저장소 **Settings > Secrets and variables > Actions**에서 아래 Repository secret 6개를 추가합니다.
+
+```text
+NEXT_PUBLIC_FIREBASE_API_KEY
+NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
+NEXT_PUBLIC_FIREBASE_PROJECT_ID
+NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
+NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID
+NEXT_PUBLIC_FIREBASE_APP_ID
+```
+
+로컬에서는 `.env.example`을 `.env.local`로 복사한 뒤 같은 값을 입력합니다. Firebase 웹 구성값은 클라이언트 식별 정보이며, 데이터 접근 보호는 Firestore·Storage 보안 규칙으로 설정해야 합니다.
+
 ## 주요 파일
 
-- `app/page.tsx`: 홈, 프로필, 월드컵·테스트 제작과 플레이, 연성 소재, 내 보관함
+- `app/page.tsx`: 홈, Google 로그인, 월드컵·고급 테스트 제작과 플레이, 연성 소재, 내 보관함
 - `app/globals.css`: 전체 디자인과 반응형 스타일
 - `app/layout.tsx`: 사이트 제목과 공유 메타데이터
+- `lib/firebase.ts`: Firebase 앱과 Google 로그인 초기화
 - `public/characters/ante-holstein.png`: 사용자 제공 대표 이미지 원본
 - `.github/workflows/deploy-pages.yml`: GitHub Pages 자동 배포

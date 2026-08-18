@@ -1,335 +1,187 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from "firebase/auth";
+import { firebaseConfigured, getFirebaseAuth } from "@/lib/firebase";
 
 type ContentKind = "월드컵" | "테스트" | "자캐 콘텐츠";
-type ModalName = "creator" | "preview" | "library" | "profile" | "prompt" | "worldcupPlay" | "testPlay" | null;
-
-type Profile = { userId: string; nickname: string };
+type ModalName = "creator" | "preview" | "library" | "account" | "loginHelp" | "prompt" | "worldcupPlay" | "testPlay" | null;
+type TestMode = "variable" | "mbti";
 type WorldcupEntry = { id: string; name: string; description: string; image?: string };
-type TestQuestion = { id: string; text: string; choiceA: string; choiceB: string };
-type TestResults = { a: string; b: string };
+type ScoreLink = { id: string; variable: string; score: number };
+type TestChoice = { id: string; text: string; links: ScoreLink[] };
+type TestQuestion = { id: string; text: string; choices: TestChoice[] };
+type TestResult = { id: string; key: string; title: string; description: string };
 type Draft = {
-  id: string;
-  kind: ContentKind;
-  template: string;
-  title: string;
-  description: string;
-  cover?: string;
-  theme: string;
-  entries?: WorldcupEntry[];
-  questions?: TestQuestion[];
-  results?: TestResults;
+  id: string; kind: ContentKind; template: string; title: string; description: string; cover?: string; theme: string;
+  entries?: WorldcupEntry[]; testMode?: TestMode; questions?: TestQuestion[]; results?: TestResult[]; mbtiLabels?: Record<string, string>;
 };
-
-type PromptResult = {
-  genre: string;
-  relationship: string;
-  mood: string;
-  place: string;
-  incident: string;
-  line: string;
-};
+type PromptResult = { genre: string; relationship: string; mood: string; place: string; incident: string; line: string };
+type PlayedResult = { code: string; title: string; description: string };
 
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
 const heroImage = `${basePath}/characters/ante-holstein.png`;
-const draftKey = "otaku-playground-drafts-v2";
-const profileKey = "otaku-playground-profile";
-
-const worldcupTemplates = ["최애 캐릭터 월드컵", "자캐 인기투표", "관계성·커플링 월드컵", "의상·표정·장면 고르기", "절대 못 참는 것 월드컵"];
-const testTemplates = ["내 취향의 캐릭터 유형은?", "내가 이 세계관에 들어가면?", "나와 가장 잘 맞는 자캐는?", "내 취향의 관계성 조합", "판타지 길드에서 맡을 포지션", "나에게 어울리는 초능력·무기·속성", "나의 오타쿠 유형은?"];
+const draftKey = "otaku-playground-drafts-v3";
+const worldcupTemplates = ["최애 캐릭터 월드컵", "자캐 인기투표", "관계성·커플링 월드컵", "의상·표정·장면 고르기"];
+const testTemplates = ["내 취향의 캐릭터 유형은?", "내가 이 세계관에 들어가면?", "나와 가장 잘 맞는 자캐는?", "내 취향의 관계성 조합", "나의 오타쿠 유형은?"];
 const characterTemplates = ["자캐 프로필 카드", "익명 첫인상", "자캐 관계도", "자캐 케미 테스트", "랜덤 관계성", "대사·상황 가챠", "선관표·취향 빙고", "색상 팔레트"];
-const themes = ["묵장미", "라일락", "낡은 서류", "미드나잇"];
-
+const themes = ["라일락", "피치", "민트", "나이트"];
+const mbtiVariables = ["E", "I", "S", "N", "T", "F", "J", "P"];
+const mbtiTypes = ["ISTJ","ISFJ","INFJ","INTJ","ISTP","ISFP","INFP","INTP","ESTP","ESFP","ENFP","ENTP","ESTJ","ESFJ","ENFJ","ENTJ"];
 const promptParts = {
   genre: ["고딕 판타지", "현대 오컬트", "동양풍 궁중극", "스페이스 오페라", "아포칼립스", "마법 학교", "느와르", "로맨스 판타지"],
-  relationship: ["서로를 의심하는 동료", "오래 헤어진 소꿉친구", "주종이 뒤바뀐 계약 관계", "기억을 공유하는 숙적", "정체를 숨긴 구원자와 추적자", "서로만 살아남은 라이벌", "가짜 연인 행세를 하는 원수", "한쪽만 미래를 아는 동맹"],
-  mood: ["비가 그친 직후의 서늘함", "파국 직전의 다정함", "들킬 듯 말 듯한 긴장", "되돌릴 수 없는 그리움", "웃음 아래 감춘 공포", "오래된 약속의 온기", "말하지 못한 질투", "평온해서 더 불길한 밤"],
-  place: ["폐쇄된 야간 열차", "장미가 시들지 않는 온실", "봉인된 왕실 기록실", "해가 뜨지 않는 항구", "폐허가 된 놀이공원", "달의 뒷면 관측소", "눈보라 속 외딴 여관", "출입 금지된 지하 예배당"],
-  incident: ["둘 중 한 명의 기억이 매일 사라진다", "거짓말을 하면 상대의 상처가 벌어진다", "자정마다 관계가 하루 전으로 되돌아간다", "서로의 꿈에서 같은 살인 사건을 목격한다", "한 명만 읽을 수 있는 유언장이 도착한다", "둘의 이름이 적힌 수배 전단이 도시 전역에 붙는다", "죽은 줄 알았던 인물에게서 초대장이 온다", "문을 열 때마다 서로 다른 세계가 나타난다"],
-  line: ["“이번에도 나를 모르는 척할 거야?”", "“네가 기억하지 못해도, 나는 약속을 지킬 거야.”", "“도망쳐. 내가 아직 네 편일 때.”", "“처음부터 구하려던 건 세상이 아니었어.”", "“그 문을 열면 우리 중 하나는 돌아오지 못해.”", "“미워해도 좋아. 대신 내 곁에서 해.”"],
+  relationship: ["서로를 의심하는 동료", "오래 헤어진 소꿉친구", "주종이 뒤바뀐 계약 관계", "기억을 공유하는 숙적", "정체를 숨긴 구원자와 추적자", "가짜 연인 행세를 하는 원수"],
+  mood: ["비가 그친 직후의 서늘함", "파국 직전의 다정함", "들킬 듯 말 듯한 긴장", "되돌릴 수 없는 그리움", "웃음 아래 감춘 공포", "오래된 약속의 온기"],
+  place: ["폐쇄된 야간 열차", "장미가 시들지 않는 온실", "봉인된 왕실 기록실", "해가 뜨지 않는 항구", "폐허가 된 놀이공원", "눈보라 속 외딴 여관"],
+  incident: ["둘 중 한 명의 기억이 매일 사라진다", "거짓말을 하면 상대의 상처가 벌어진다", "자정마다 관계가 하루 전으로 되돌아간다", "한 명만 읽을 수 있는 유언장이 도착한다", "죽은 줄 알았던 인물에게서 초대장이 온다"],
+  line: ["“이번에도 나를 모르는 척할 거야?”", "“네가 기억하지 못해도, 나는 약속을 지킬 거야.”", "“도망쳐. 내가 아직 네 편일 때.”", "“처음부터 구하려던 건 세상이 아니었어.”", "“그 문을 열면 우리 중 하나는 돌아오지 못해.”"],
 };
 
-const portals = [
-  { kind: "월드컵" as const, roman: "I", icon: "♛", title: "오타쿠형 월드컵", copy: "이미지와 설명을 등록하고 실제 대결을 진행해 최애를 가려요." },
-  { kind: "테스트" as const, roman: "II", icon: "✦", title: "테스트 제작실", copy: "질문과 선택지, 결과를 직접 연결하고 완성된 테스트를 풀어요." },
-  { kind: "자캐 콘텐츠" as const, roman: "III", icon: "♡", title: "자캐 기록 보관소", copy: "프로필, 첫인상, 관계도와 문답을 한 세계관 안에 쌓아요." },
-];
-
-const tools = [
-  ["ID", "자캐 프로필 카드", "설정과 이미지를 한 장의 기록표로"],
-  ["?", "익명 첫인상", "설명 없이 캐릭터의 첫 느낌 받기"],
-  ["∞", "자캐 관계도", "관계와 감정선을 연결해 기록하기"],
-  ["×", "자캐 케미 테스트", "둘의 성격으로 조합 살펴보기"],
-  ["↻", "랜덤 관계성", "뜻밖의 관계와 사건을 뽑아보기"],
-  ["✎", "대사·상황 가챠", "장면을 시작할 한 줄 얻기"],
-  ["▦", "선관표·취향 빙고", "친구들과 채우는 양식 만들기"],
-  ["◐", "색상 팔레트", "캐릭터의 분위기를 색으로 모으기"],
-];
-
-function readLocal<T>(key: string, fallback: T): T {
-  if (typeof window === "undefined") return fallback;
-  try {
-    const value = window.localStorage.getItem(key);
-    return value ? JSON.parse(value) as T : fallback;
-  } catch {
-    return fallback;
-  }
+function uid() { return crypto.randomUUID(); }
+function randomItem(items: string[]) { return items[crypto.getRandomValues(new Uint32Array(1))[0] % items.length]; }
+function defaultResults(): TestResult[] { return [
+  { id: "result-a", key: "A", title: "서사를 지키는 관찰자", description: "천천히 맥락을 읽고 오래 기억하는 타입" },
+  { id: "result-b", key: "B", title: "감정에 뛰어드는 주인공", description: "마음이 움직이면 곧장 장면 속으로 들어가는 타입" },
+  { id: "result-c", key: "C", title: "관계를 엮는 설계자", description: "인물 사이의 감정선과 조합을 사랑하는 타입" },
+  { id: "result-d", key: "D", title: "설정을 파고드는 탐험가", description: "세계의 규칙과 숨은 설정을 끝까지 찾아가는 타입" },
+]; }
+function defaultMbtiLabels() { return Object.fromEntries(mbtiTypes.map((code) => [code, `${code}형 오타쿠`])); }
+function defaultQuestions(mode: TestMode): TestQuestion[] {
+  if (mode === "mbti") return [{ id: "q-mbti", text: "새 장르에 입덕했을 때 나는?", choices: [
+    { id: "c-e", text: "친구를 불러 함께 이야기한다", links: [{ id: "l-e", variable: "E", score: 1 }] },
+    { id: "c-i", text: "혼자 조용히 자료부터 모은다", links: [{ id: "l-i", variable: "I", score: 1 }] },
+  ] }];
+  return [{ id: "q-variable", text: "가장 먼저 마음이 가는 장면은?", choices: [
+    { id: "c-b", text: "위험을 무릅쓰고 달려오는 장면", links: [{ id: "l-b", variable: "B", score: 2 }] },
+    { id: "c-d", text: "오래된 비밀이 드러나는 장면", links: [{ id: "l-d", variable: "D", score: 2 }] },
+  ] }];
 }
-
-function randomItem(items: string[]) {
-  const number = crypto.getRandomValues(new Uint32Array(1))[0];
-  return items[number % items.length];
-}
-
-function newEntry(index: number): WorldcupEntry {
-  return { id: crypto.randomUUID(), name: `참가자 ${index}`, description: "" };
-}
-
-function newQuestion(index: number): TestQuestion {
-  return { id: crypto.randomUUID(), text: `질문 ${index}`, choiceA: "첫 번째 선택", choiceB: "두 번째 선택" };
-}
-
-function Logo() {
-  return <span className="brand"><span className="brand-seal">O</span><span><b>OTAKU</b><small>PLAYGROUND ARCHIVE</small></span></span>;
-}
-
-function RoseCluster({ className = "" }: { className?: string }) {
-  return (
-    <svg className={`rose-cluster ${className}`} viewBox="0 0 210 120" aria-hidden="true">
-      <g fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M18 96C48 77 72 58 102 25M82 58C55 47 42 28 36 12M93 43c20 8 40 3 57-10M112 77c26-2 48 8 76 30" />
-        <path d="M47 70c-24 0-29-19-29-19 19-5 32 5 29 19ZM62 55C49 37 58 23 58 23c18 9 19 24 4 32ZM129 40c5-19 23-21 23-21 4 19-7 31-23 21ZM148 87c16-13 32-5 32-5-6 18-21 22-32 5Z" fill="currentColor" opacity=".22" />
-      </g>
-      <g fill="currentColor">
-        <circle cx="96" cy="58" r="26" opacity=".28" /><circle cx="84" cy="50" r="17" /><circle cx="108" cy="47" r="17" /><circle cx="109" cy="68" r="17" /><circle cx="86" cy="71" r="17" /><circle cx="97" cy="59" r="11" />
-      </g>
-    </svg>
-  );
+function newWorldcupEntry(index: number): WorldcupEntry { return { id: uid(), name: `참가자 ${index}`, description: "" }; }
+function newChoice(variable: string, index: number): TestChoice { return { id: uid(), text: `선택지 ${index}`, links: [{ id: uid(), variable, score: 1 }] }; }
+function newQuestion(mode: TestMode, index: number): TestQuestion { return { id: uid(), text: `질문 ${index}`, choices: [newChoice(mode === "mbti" ? "E" : "A", 1), newChoice(mode === "mbti" ? "I" : "B", 2)] }; }
+function Logo() { return <span className="brand"><span>O</span><b>오타쿠놀이터</b></span>; }
+function readDrafts(): Draft[] {
+  if (typeof window === "undefined") return [];
+  try { return JSON.parse(window.localStorage.getItem(draftKey) || "[]") as Draft[]; } catch { return []; }
 }
 
 export default function Home() {
   const [modal, setModal] = useState<ModalName>(null);
-  const [profile, setProfile] = useState<Profile | null>(() => readLocal<Profile | null>(profileKey, null));
-  const [profileId, setProfileId] = useState("");
-  const [nickname, setNickname] = useState("");
-  const [drafts, setDrafts] = useState<Draft[]>(() => readLocal<Draft[]>(draftKey, []));
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [drafts, setDrafts] = useState<Draft[]>(readDrafts);
   const [kind, setKind] = useState<ContentKind>("월드컵");
   const [template, setTemplate] = useState(worldcupTemplates[0]);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [cover, setCover] = useState("");
   const [theme, setTheme] = useState(themes[0]);
-  const [entries, setEntries] = useState<WorldcupEntry[]>([
-    { id: "initial-a", name: "참가자 1", description: "" },
-    { id: "initial-b", name: "참가자 2", description: "" },
-  ]);
-  const [questions, setQuestions] = useState<TestQuestion[]>([
-    { id: "initial-question", text: "어떤 순간에 더 마음이 움직이나요?", choiceA: "말없이 곁을 지킬 때", choiceB: "위험을 무릅쓰고 달려올 때" },
-  ]);
-  const [results, setResults] = useState<TestResults>({ a: "서사에 끌리는 관찰자", b: "감정에 뛰어드는 모험가" });
+  const [entries, setEntries] = useState<WorldcupEntry[]>([{ id: "entry-a", name: "참가자 1", description: "" }, { id: "entry-b", name: "참가자 2", description: "" }]);
+  const [testMode, setTestMode] = useState<TestMode>("variable");
+  const [questions, setQuestions] = useState<TestQuestion[]>(defaultQuestions("variable"));
+  const [results, setResults] = useState<TestResult[]>(defaultResults());
+  const [mbtiLabels, setMbtiLabels] = useState<Record<string, string>>(defaultMbtiLabels());
   const [promptResult, setPromptResult] = useState<PromptResult | null>(null);
   const [tournamentQueue, setTournamentQueue] = useState<WorldcupEntry[]>([]);
   const [tournamentWinners, setTournamentWinners] = useState<WorldcupEntry[]>([]);
   const [champion, setChampion] = useState<WorldcupEntry | null>(null);
   const [testIndex, setTestIndex] = useState(0);
-  const [testScore, setTestScore] = useState(0);
-  const [testResult, setTestResult] = useState("");
+  const [testScores, setTestScores] = useState<Record<string, number>>({});
+  const [testResult, setTestResult] = useState<PlayedResult | null>(null);
   const [toast, setToast] = useState("");
-  const coverRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const auth = getFirebaseAuth();
+    if (!auth) { queueMicrotask(() => setAuthLoading(false)); return; }
+    return onAuthStateChanged(auth, (nextUser) => { setUser(nextUser); setAuthLoading(false); });
+  }, []);
 
   const templateOptions = useMemo(() => kind === "월드컵" ? worldcupTemplates : kind === "테스트" ? testTemplates : characterTemplates, [kind]);
-
-  const notify = (message: string) => {
-    setToast(message);
-    window.setTimeout(() => setToast(""), 2400);
+  const variableOptions = useMemo(() => testMode === "mbti" ? mbtiVariables : results.map((result) => result.key.trim().toUpperCase()).filter(Boolean), [testMode, results]);
+  const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(""), 2400); };
+  const loginWithGoogle = async () => {
+    const auth = getFirebaseAuth(); if (!auth) { setModal("loginHelp"); return; }
+    try { const provider = new GoogleAuthProvider(); provider.setCustomParameters({ prompt: "select_account" }); await signInWithPopup(auth, provider); notify("Google 계정으로 로그인했어요."); }
+    catch (error) { const code = typeof error === "object" && error && "code" in error ? String(error.code) : ""; if (code !== "auth/popup-closed-by-user") notify("로그인에 실패했어요. Firebase 승인 도메인을 확인해 주세요."); }
   };
-
+  const logout = async () => { const auth = getFirebaseAuth(); if (auth) await signOut(auth); setModal(null); notify("로그아웃했어요."); };
   const fileToData = (file: File, done: (value: string) => void) => {
     if (!file.type.startsWith("image/")) return notify("이미지 파일을 선택해 주세요.");
-    const reader = new FileReader();
-    reader.onload = () => done(String(reader.result || ""));
-    reader.readAsDataURL(file);
+    if (file.size > 10 * 1024 * 1024) return notify("이미지는 10MB 이하만 올릴 수 있어요.");
+    const reader = new FileReader(); reader.onload = () => done(String(reader.result || "")); reader.readAsDataURL(file);
   };
-
   const resetBuilder = (nextKind: ContentKind, nextTemplate?: string) => {
     const options = nextKind === "월드컵" ? worldcupTemplates : nextKind === "테스트" ? testTemplates : characterTemplates;
-    setKind(nextKind);
-    setTemplate(nextTemplate || options[0]);
-    setTitle(""); setDescription(""); setCover(""); setTheme(themes[0]);
-    setEntries([{ id: crypto.randomUUID(), name: "참가자 1", description: "" }, { id: crypto.randomUUID(), name: "참가자 2", description: "" }]);
-    setQuestions([newQuestion(1)]);
-    setResults({ a: "서사에 끌리는 관찰자", b: "감정에 뛰어드는 모험가" });
-    setModal("creator");
+    setKind(nextKind); setTemplate(nextTemplate || options[0]); setTitle(""); setDescription(""); setCover(""); setTheme(themes[0]);
+    setEntries([newWorldcupEntry(1), newWorldcupEntry(2)]); setTestMode("variable"); setQuestions(defaultQuestions("variable")); setResults(defaultResults()); setMbtiLabels(defaultMbtiLabels()); setModal("creator");
   };
-
-  const changeKind = (nextKind: ContentKind) => {
-    const options = nextKind === "월드컵" ? worldcupTemplates : nextKind === "테스트" ? testTemplates : characterTemplates;
-    setKind(nextKind); setTemplate(options[0]);
-  };
-
-  const saveProfile = () => {
-    const cleanId = profileId.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
-    if (cleanId.length < 3 || !nickname.trim()) return notify("아이디는 영문·숫자 세 글자 이상, 닉네임도 함께 적어주세요.");
-    const next = { userId: cleanId, nickname: nickname.trim() };
-    setProfile(next); window.localStorage.setItem(profileKey, JSON.stringify(next)); setModal(null); notify("내 프로필을 만들었어요.");
-  };
-
-  const updateEntry = (id: string, field: "name" | "description", value: string) => setEntries((current) => current.map((entry) => entry.id === id ? { ...entry, [field]: value } : entry));
-  const updateEntryImage = (id: string, file?: File) => file && fileToData(file, (image) => setEntries((current) => current.map((entry) => entry.id === id ? { ...entry, image } : entry)));
-  const updateQuestion = (id: string, field: keyof Omit<TestQuestion, "id">, value: string) => setQuestions((current) => current.map((question) => question.id === id ? { ...question, [field]: value } : question));
+  const changeKind = (nextKind: ContentKind) => { const options = nextKind === "월드컵" ? worldcupTemplates : nextKind === "테스트" ? testTemplates : characterTemplates; setKind(nextKind); setTemplate(options[0]); };
+  const changeTestMode = (mode: TestMode) => { setTestMode(mode); setQuestions(defaultQuestions(mode)); setTestResult(null); };
+  const updateEntry = (id: string, field: "name" | "description", value: string) => setEntries((items) => items.map((item) => item.id === id ? { ...item, [field]: value } : item));
+  const updateQuestionText = (questionId: string, value: string) => setQuestions((items) => items.map((item) => item.id === questionId ? { ...item, text: value } : item));
+  const updateChoiceText = (questionId: string, choiceId: string, value: string) => setQuestions((items) => items.map((question) => question.id !== questionId ? question : { ...question, choices: question.choices.map((choice) => choice.id === choiceId ? { ...choice, text: value } : choice) }));
+  const updateLink = (questionId: string, choiceId: string, linkId: string, field: "variable" | "score", value: string | number) => setQuestions((items) => items.map((question) => question.id !== questionId ? question : { ...question, choices: question.choices.map((choice) => choice.id !== choiceId ? choice : { ...choice, links: choice.links.map((link) => link.id === linkId ? { ...link, [field]: value } : link) }) }));
+  const addLink = (questionId: string, choiceId: string) => setQuestions((items) => items.map((question) => question.id !== questionId ? question : { ...question, choices: question.choices.map((choice) => choice.id === choiceId ? { ...choice, links: [...choice.links, { id: uid(), variable: variableOptions[0] || "A", score: 1 }] } : choice) }));
+  const removeLink = (questionId: string, choiceId: string, linkId: string) => setQuestions((items) => items.map((question) => question.id !== questionId ? question : { ...question, choices: question.choices.map((choice) => choice.id === choiceId ? { ...choice, links: choice.links.filter((link) => link.id !== linkId) } : choice) }));
+  const addChoice = (questionId: string) => setQuestions((items) => items.map((question) => question.id === questionId ? { ...question, choices: [...question.choices, newChoice(variableOptions[0] || "A", question.choices.length + 1)] } : question));
+  const removeChoice = (questionId: string, choiceId: string) => setQuestions((items) => items.map((question) => question.id === questionId ? { ...question, choices: question.choices.filter((choice) => choice.id !== choiceId) } : question));
 
   const validateDraft = () => {
     if (!title.trim()) return "제목을 적어주세요.";
-    if (kind === "월드컵" && entries.filter((entry) => entry.name.trim()).length < 2) return "월드컵 참가자를 두 명 이상 적어주세요.";
-    if (kind === "테스트" && questions.some((question) => !question.text.trim() || !question.choiceA.trim() || !question.choiceB.trim())) return "모든 질문과 선택지를 채워주세요.";
+    if (kind === "월드컵" && entries.filter((entry) => entry.name.trim()).length < 2) return "참가자를 두 명 이상 적어주세요.";
+    if (kind === "테스트") {
+      if (testMode === "variable" && (results.length < 2 || new Set(results.map((item) => item.key.trim().toUpperCase())).size !== results.length || results.some((item) => !item.key.trim() || !item.title.trim()))) return "결과 변수는 서로 다른 이름으로 두 개 이상 설정해 주세요.";
+      if (!questions.length || questions.some((question) => !question.text.trim() || question.choices.length < 2 || question.choices.some((choice) => !choice.text.trim() || !choice.links.length))) return "각 질문에 선택지와 숨은 점수를 모두 채워주세요.";
+    }
     return "";
   };
-
-  const currentDraft = (): Draft => ({ id: crypto.randomUUID(), kind, template, title: title.trim(), description: description.trim(), cover: cover || undefined, theme, entries: kind === "월드컵" ? entries : undefined, questions: kind === "테스트" ? questions : undefined, results: kind === "테스트" ? results : undefined });
-
-  const saveDraft = () => {
-    const error = validateDraft(); if (error) return notify(error);
-    const next = [currentDraft(), ...drafts];
-    try { window.localStorage.setItem(draftKey, JSON.stringify(next)); setDrafts(next); setModal("library"); notify("내 보관함에 저장했어요."); }
-    catch { notify("이미지가 너무 커서 저장하지 못했어요. 더 작은 이미지를 사용해 주세요."); }
+  const currentDraft = (): Draft => ({ id: uid(), kind, template, title: title.trim(), description: description.trim(), cover: cover || undefined, theme, entries: kind === "월드컵" ? entries : undefined, testMode: kind === "테스트" ? testMode : undefined, questions: kind === "테스트" ? questions : undefined, results: kind === "테스트" ? results : undefined, mbtiLabels: kind === "테스트" ? mbtiLabels : undefined });
+  const saveDraft = () => { const error = validateDraft(); if (error) return notify(error); const next = [currentDraft(), ...drafts]; try { localStorage.setItem(draftKey, JSON.stringify(next)); setDrafts(next); setModal("library"); notify(user ? `${user.displayName || "내"} 보관함에 저장했어요.` : "이 브라우저의 보관함에 저장했어요."); } catch { notify("이미지가 너무 커서 저장하지 못했어요."); } };
+  const loadDraft = (draft: Draft) => { setKind(draft.kind); setTemplate(draft.template); setTitle(draft.title); setDescription(draft.description); setCover(draft.cover || ""); setTheme(draft.theme); if (draft.entries) setEntries(draft.entries); setTestMode(draft.testMode || "variable"); if (draft.questions) setQuestions(draft.questions); if (draft.results) setResults(draft.results); if (draft.mbtiLabels) setMbtiLabels(draft.mbtiLabels); setModal("preview"); };
+  const startWorldcup = () => { const error = validateDraft(); if (error) return notify(error); setTournamentQueue(entries.filter((entry) => entry.name.trim())); setTournamentWinners([]); setChampion(null); setModal("worldcupPlay"); };
+  const chooseWinner = (winner: WorldcupEntry) => { const remaining = tournamentQueue.slice(2); const nextWinners = [...tournamentWinners, winner]; if (remaining.length === 1) { setTournamentQueue([...nextWinners, remaining[0]]); setTournamentWinners([]); } else if (!remaining.length) { if (nextWinners.length === 1) setChampion(nextWinners[0]); else { setTournamentQueue(nextWinners); setTournamentWinners([]); } } else { setTournamentQueue(remaining); setTournamentWinners(nextWinners); } };
+  const startTest = () => { const error = validateDraft(); if (error) return notify(error); setTestIndex(0); setTestScores({}); setTestResult(null); setModal("testPlay"); };
+  const resolveTestResult = (scores: Record<string, number>): PlayedResult => {
+    if (testMode === "mbti") { const code = `${(scores.E || 0) >= (scores.I || 0) ? "E" : "I"}${(scores.S || 0) >= (scores.N || 0) ? "S" : "N"}${(scores.T || 0) >= (scores.F || 0) ? "T" : "F"}${(scores.J || 0) >= (scores.P || 0) ? "J" : "P"}`; return { code, title: mbtiLabels[code] || `${code}형 오타쿠`, description: "네 가지 성향 축의 숨은 점수를 합산한 결과예요." }; }
+    const winner = [...results].sort((a, b) => (scores[b.key.trim().toUpperCase()] || 0) - (scores[a.key.trim().toUpperCase()] || 0))[0]; return { code: winner.key.toUpperCase(), title: winner.title, description: winner.description };
   };
+  const answerTest = (choice: TestChoice) => { const nextScores = { ...testScores }; choice.links.forEach((link) => { const key = link.variable.trim().toUpperCase(); nextScores[key] = (nextScores[key] || 0) + Number(link.score || 0); }); setTestScores(nextScores); if (testIndex + 1 >= questions.length) setTestResult(resolveTestResult(nextScores)); else setTestIndex((value) => value + 1); };
+  const generatePrompt = () => { setPromptResult({ genre: randomItem(promptParts.genre), relationship: randomItem(promptParts.relationship), mood: randomItem(promptParts.mood), place: randomItem(promptParts.place), incident: randomItem(promptParts.incident), line: randomItem(promptParts.line) }); setModal("prompt"); };
+  const copyPrompt = async () => { if (!promptResult) return; try { await navigator.clipboard.writeText(`[${promptResult.genre}] ${promptResult.relationship}. ${promptResult.place}에서 ${promptResult.incident}. ${promptResult.line}`); notify("연성 소재를 복사했어요."); } catch { notify("화면의 문장을 직접 선택해 주세요."); } };
+  const categories = [
+    ["🏆", "월드컵", () => resetBuilder("월드컵")], ["✨", "테스트", () => resetBuilder("테스트")], ["🎨", "자캐 등록", () => resetBuilder("자캐 콘텐츠")], ["💬", "첫인상", () => resetBuilder("자캐 콘텐츠", "익명 첫인상")],
+    ["🔗", "관계도", () => resetBuilder("자캐 콘텐츠", "자캐 관계도")], ["🎲", "연성 소재", generatePrompt], ["🎭", "케미 테스트", () => resetBuilder("자캐 콘텐츠", "자캐 케미 테스트")], ["🗂️", "내 보관함", () => setModal("library")],
+  ] as const;
 
-  const loadDraft = (draft: Draft) => {
-    setKind(draft.kind); setTemplate(draft.template); setTitle(draft.title); setDescription(draft.description); setCover(draft.cover || ""); setTheme(draft.theme);
-    if (draft.entries) setEntries(draft.entries); if (draft.questions) setQuestions(draft.questions); if (draft.results) setResults(draft.results);
-    setModal("preview");
-  };
+  return <main className="site-shell">
+    <div className="utility-bar"><div><span>취향이 콘텐츠가 되는 곳</span><span>건전한 창작 커뮤니티를 함께 만들어요</span></div></div>
+    <header className="site-header"><a href="#top" aria-label="오타쿠놀이터 홈"><Logo /></a><nav><a href="#discover">둘러보기</a><a href="#worldcup">월드컵</a><a href="#test-studio">테스트</a><a href="#oc-tools">자캐 콘텐츠</a><button type="button" onClick={generatePrompt}>연성 소재</button></nav><div className="header-actions"><button className="search-button" type="button" aria-label="검색">⌕</button><button className="login-button" type="button" disabled={authLoading} onClick={() => user ? setModal("account") : void loginWithGoogle()}>{user?.photoURL ? <img src={user.photoURL} alt="" referrerPolicy="no-referrer" /> : <span className="google-g">G</span>}{authLoading ? "확인 중" : user ? (user.displayName || "내 계정") : "Google로 로그인"}</button><button className="create-button" type="button" onClick={() => resetBuilder("월드컵")}>＋ 만들기</button></div></header>
+    <section className="hero" id="top"><div className="hero-main"><div className="hero-copy"><span className="eyebrow">OTAKU PLAYGROUND</span><h1>내 취향을<br />재미있는 콘텐츠로</h1><p>월드컵부터 성향 테스트, 자캐 관계와 연성 소재까지.<br />만들고, 놀고, 함께 공유해요.</p><div><button type="button" onClick={() => resetBuilder("테스트")}>테스트 만들기</button><button type="button" onClick={() => resetBuilder("월드컵")}>월드컵 열기</button></div></div><div className="hero-image"><span className="image-chip">FEATURED CHARACTER</span><img src={heroImage} alt="사용자가 제공한 캐릭터 원본 이미지" /></div></div><div className="hero-side"><button className="side-card mint" type="button" onClick={() => resetBuilder("테스트")}><span>NEW</span><h2>숨은 변수로 만드는<br />나만의 성향 테스트</h2><p>MBTI형 · 직접 변수형</p><b>만들어 보기 →</b></button><button className="side-card peach" type="button" onClick={generatePrompt}><span>WRITING</span><h2>막힌 장면을 여는<br />연성 소재 한 장</h2><p>관계 · 장소 · 사건 · 대사</p><b>지금 뽑기 →</b></button></div></section>
+    <section className="category-strip" aria-label="콘텐츠 바로가기">{categories.map(([icon, label, action]) => <button key={label} type="button" onClick={action}><span>{icon}</span><b>{label}</b></button>)}</section>
+    <section className="quick-maker" id="discover"><div><span>뭘 만들지 고민된다면</span><h2>오늘은 어떤 콘텐츠로 놀까요?</h2></div><div className="quick-search"><select aria-label="콘텐츠 종류"><option>전체 콘텐츠</option><option>월드컵</option><option>테스트</option><option>자캐 콘텐츠</option></select><input aria-label="콘텐츠 검색" placeholder="키워드를 입력해 보세요" /><button type="button" onClick={() => resetBuilder("월드컵")}>바로 만들기</button></div><div className="keyword-row"><small>추천</small>{["#최애월드컵","#자캐첫인상","#관계성테스트","#MBTI","#연성소재"].map((tag) => <span key={tag}>{tag}</span>)}</div></section>
+    <section className="feature-section" id="worldcup"><div className="section-title"><span>POPULAR MAKERS</span><h2>표지만이 아니라, 실제로 플레이해요</h2><p>이미지와 설명을 넣어 만들고 바로 결과까지 확인할 수 있어요.</p></div><div className="feature-grid"><article className="feature-card lavender"><div className="card-icon">VS</div><span>WORLD CUP</span><h3>오타쿠형 월드컵</h3><p>참가자를 원하는 만큼 추가하고 라운드를 직접 진행해 최종 우승자를 골라요.</p><ul><li>참가자별 이미지 업로드</li><li>자동 라운드 진행</li><li>결과 공유 문구 복사</li></ul><button type="button" onClick={() => resetBuilder("월드컵")}>월드컵 만들기 →</button></article><article className="feature-card sky" id="test-studio"><div className="card-icon">f(x)</div><span>TEST STUDIO</span><h3>고급 테스트 제작기</h3><p>선택지는 이용자에게만 보여 주고, 제작자는 뒤에서 결과 변수를 자유롭게 연결해요.</p><ul><li>선택지 개수 제한 없음</li><li>선택지마다 복수 변수·점수</li><li>직접 변수형 / MBTI형</li></ul><button type="button" onClick={() => resetBuilder("테스트")}>테스트 만들기 →</button></article><article className="feature-card butter"><div className="card-icon">✦</div><span>PROMPT DRAW</span><h3>연성 소재 뽑기</h3><p>관계, 배경, 사건과 대사를 무작위로 조합해 다음 장면의 시작을 만들어요.</p><ul><li>장르와 분위기 조합</li><li>몇 번이든 다시 뽑기</li><li>한 번에 문장 복사</li></ul><button type="button" onClick={generatePrompt}>소재 한 장 뽑기 →</button></article></div></section>
+    <section className="oc-section" id="oc-tools"><div className="section-title"><span>ORIGINAL CHARACTER</span><h2>캐릭터 하나로 이어지는 여러 가지 놀이</h2><p>첫인상뿐 아니라 관계, 문답, 가챠와 기록까지 한곳에서.</p></div><div className="oc-grid">{characterTemplates.map((item, index) => <button type="button" key={item} onClick={() => resetBuilder("자캐 콘텐츠", item)}><span>{["ID","?","∞","♥","↻","✎","▦","◐"][index]}</span><div><b>{item}</b><small>{["설정과 이미지를 카드로", "설명 없이 첫 느낌 받기", "감정선을 연결해 기록", "둘의 조합을 테스트", "뜻밖의 관계를 뽑기", "대사와 상황을 가챠", "친구들과 채우는 양식", "캐릭터 색을 한눈에"][index]}</small></div><i>→</i></button>)}</div></section>
+    <section className="cta"><div><span>MAKE YOUR FANDOM PLAYABLE</span><h2>머릿속 취향을 오늘의 놀거리로 만들어 보세요.</h2></div><button type="button" onClick={() => resetBuilder("테스트")}>무료로 시작하기 →</button></section>
+    <footer><Logo /><p>월드컵 · 테스트 · 자캐 콘텐츠 · 연성 소재</p><div><button type="button" onClick={() => setModal("library")}>내 보관함</button><a href="#top">맨 위로</a></div></footer>
+    <nav className="mobile-nav"><a href="#top"><span>⌂</span>홈</a><a href="#worldcup"><span>VS</span>월드컵</a><button type="button" onClick={() => resetBuilder("테스트")}><span>＋</span>만들기</button><button type="button" onClick={generatePrompt}><span>✦</span>소재</button><button type="button" onClick={() => setModal("library")}><span>□</span>보관함</button></nav>
 
-  const startWorldcup = () => {
-    const error = validateDraft(); if (error) return notify(error);
-    const players = entries.filter((entry) => entry.name.trim());
-    setTournamentQueue(players); setTournamentWinners([]); setChampion(null); setModal("worldcupPlay");
-  };
-
-  const chooseWinner = (winner: WorldcupEntry) => {
-    const remaining = tournamentQueue.slice(2);
-    const nextWinners = [...tournamentWinners, winner];
-    if (remaining.length === 1) {
-      const finalists = [...nextWinners, remaining[0]];
-      setTournamentQueue(finalists); setTournamentWinners([]);
-    } else if (remaining.length === 0) {
-      if (nextWinners.length === 1) setChampion(nextWinners[0]);
-      else { setTournamentQueue(nextWinners); setTournamentWinners([]); }
-    } else {
-      setTournamentQueue(remaining); setTournamentWinners(nextWinners);
-    }
-  };
-
-  const startTest = () => {
-    const error = validateDraft(); if (error) return notify(error);
-    setTestIndex(0); setTestScore(0); setTestResult(""); setModal("testPlay");
-  };
-
-  const answerTest = (point: number) => {
-    const score = testScore + point;
-    if (testIndex + 1 >= questions.length) { setTestScore(score); setTestResult(score >= Math.ceil(questions.length / 2) ? results.a : results.b); }
-    else { setTestScore(score); setTestIndex((value) => value + 1); }
-  };
-
-  const generatePrompt = () => {
-    setPromptResult({ genre: randomItem(promptParts.genre), relationship: randomItem(promptParts.relationship), mood: randomItem(promptParts.mood), place: randomItem(promptParts.place), incident: randomItem(promptParts.incident), line: randomItem(promptParts.line) });
-    setModal("prompt");
-  };
-
-  const copyPrompt = async () => {
-    if (!promptResult) return;
-    const text = `[${promptResult.genre}] ${promptResult.relationship}. ${promptResult.place}에서 ${promptResult.incident}. 분위기는 ${promptResult.mood}. 대사: ${promptResult.line}`;
-    try { await navigator.clipboard.writeText(text); notify("연성 소재를 복사했어요."); } catch { notify("복사할 수 없어 화면의 문장을 선택해 주세요."); }
-  };
-
-  return (
-    <main className="archive-site">
-      <header className="topbar">
-        <a href="#top"><Logo /></a>
-        <nav><a href="#chambers">놀이터</a><a href="#tournament">월드컵</a><a href="#test-studio">테스트</a><button type="button" onClick={generatePrompt}>연성 소재</button><a href="#oc-archive">자캐 보관소</a></nav>
-        <button className="profile-button" type="button" onClick={() => { setProfileId(profile?.userId || ""); setNickname(profile?.nickname || ""); setModal("profile"); }}><span>♙</span>{profile ? profile.nickname : "프로필 만들기"}</button>
-        <button className="create-button" type="button" onClick={() => resetBuilder("월드컵")}>＋ 만들기</button>
-      </header>
-
-      <section className="hero" id="top">
-        <div className="hero-ornament top-ornament">⚜ ✦ ⚜</div>
-        <div className="hero-copy">
-          <p className="archive-label">THE CABINET OF IMAGINARY THINGS</p>
-          <h1>취향과 설정을<br /><em>꺼내어 노는 곳.</em></h1>
-          <p>최애를 겨루고, 테스트를 만들고, 자캐의 관계와 장면을 기록해요. 머릿속 이야기가 실제로 움직이는 오타쿠 전용 아카이브.</p>
-          <div className="hero-actions"><button type="button" onClick={() => resetBuilder("월드컵")}>첫 콘텐츠 만들기 <span>↗</span></button><button type="button" onClick={generatePrompt}>연성 소재 뽑기 <span>✦</span></button></div>
-          <div className="index-strip"><span>WORLD CUP</span><i /><span>TEST</span><i /><span>OC ARCHIVE</span><i /><span>PROMPT</span></div>
-        </div>
-        <div className="hero-art">
-          <div className="frame-corner corner-a">⌜</div><div className="frame-corner corner-b">⌟</div>
-          <div className="portrait-frame"><img src={heroImage} alt="사용자가 제공한 캐릭터 원본 이미지" /><div className="portrait-plaque"><small>ARCHIVE PORTRAIT</small><b>SUBJECT NO. 001</b></div></div>
-          <div className="wax-seal"><span>O</span><small>PLAY</small></div>
-          <RoseCluster className="hero-roses" />
-          <div className="specimen-note">RELATION<br />UNKNOWN</div>
-        </div>
-      </section>
-
-      <section className="chambers" id="chambers">
-        <div className="section-heading"><p>CHOOSE A CHAMBER</p><h2>오늘 열어볼 <em>서랍</em></h2><span>원하는 메뉴를 고르면 제작 화면이 바로 열려요.</span></div>
-        <div className="portal-grid">
-          {portals.map((portal) => <button className="portal-card" type="button" key={portal.kind} onClick={() => resetBuilder(portal.kind)}><i>{portal.roman}</i><span className="portal-icon">{portal.icon}</span><small>{portal.kind}</small><h3>{portal.title}</h3><p>{portal.copy}</p><b>ENTER →</b></button>)}
-          <button className="portal-card prompt-portal" type="button" onClick={generatePrompt}><i>IV</i><span className="portal-icon">✎</span><small>WRITING PROMPT</small><h3>연성 소재 추첨실</h3><p>장르·관계·장소·사건·대사를 한 번에 조합해 장면의 시작을 얻어요.</p><b>DRAW →</b></button>
-        </div>
-      </section>
-
-      <section className="tournament-section" id="tournament">
-        <div className="section-paper tournament-paper">
-          <div className="paper-index">FILE / TOURNAMENT</div>
-          <div className="tournament-copy"><p className="archive-label">OTAKU TOURNAMENT MAKER</p><h2>표지만이 아니라,<br /><em>진짜 대결까지.</em></h2><p>참가자마다 이름, 이미지, 설명을 등록하세요. 제작이 끝나면 바로 일대일 대결을 진행하고 마지막 우승자를 확인할 수 있어요.</p><ul><li>참가자 계속 추가</li><li>이미지 원본 업로드</li><li>대결 라운드 자동 진행</li><li>우승 결과 복사</li></ul><button type="button" onClick={() => resetBuilder("월드컵")}>월드컵 만들기 →</button></div>
-          <div className="duel-preview"><div className="duel-card left"><span>A</span><b>CHARACTER</b></div><div className="versus-seal">VS</div><div className="duel-card right"><span>B</span><b>CHARACTER</b></div><small>CHOOSE YOUR FAVOURITE</small></div>
-          <RoseCluster className="paper-roses" />
-        </div>
-      </section>
-
-      <section className="test-section" id="test-studio">
-        <div className="test-demo"><div className="demo-top"><span>QUESTION FILE</span><i>✦</i></div><div className="demo-progress"><b /><b /><b /></div><h3>어떤 순간에 더<br />마음이 움직이나요?</h3><button type="button">A 말없이 곁을 지킬 때</button><button type="button">B 위험을 무릅쓰고 달려올 때</button><div className="demo-result">RESULT <span>?</span></div></div>
-        <div className="test-copy"><p className="archive-label">TEST STUDIO</p><h2>질문을 쓰고,<br />선택지를 잇고,<br /><em>결과를 보여줘요.</em></h2><p>질문을 원하는 만큼 추가하고 A·B 선택지를 직접 적어요. 결과 이름까지 설정하면 만든 자리에서 바로 테스트를 풀 수 있어요.</p><button type="button" onClick={() => resetBuilder("테스트")}>테스트 만들기 →</button></div>
-      </section>
-
-      <section className="prompt-section">
-        <div className="prompt-card"><div className="prompt-pin">✦</div><small>WRITING MATERIAL DRAWER</small><h2>막힌 장면을 여는<br /><em>연성 소재 한 장</em></h2><p>관계 하나, 장소 하나, 사건 하나.<br />서로 어울리지 않을 것 같은 조합에서 이야기가 시작돼요.</p><button type="button" onClick={generatePrompt}>지금 한 장 뽑기 <span>↻</span></button></div>
-        <div className="prompt-slips"><span>관계성</span><span>세계관</span><span>사건</span><span>분위기</span><span>대사</span><div className="quill">⌁</div></div>
-      </section>
-
-      <section className="oc-section" id="oc-archive">
-        <div className="section-heading light"><p>ORIGINAL CHARACTER CABINET</p><h2>자캐 하나에서 이어지는 <em>기록들</em></h2><span>첫인상은 여러 서랍 중 하나예요.</span></div>
-        <div className="tool-grid">{tools.map(([icon, name, copy]) => <button type="button" key={name} onClick={() => resetBuilder("자캐 콘텐츠", name)}><i>{icon}</i><span><b>{name}</b><small>{copy}</small></span><em>↗</em></button>)}</div>
-      </section>
-
-      <section className="closing"><RoseCluster className="closing-roses left" /><RoseCluster className="closing-roses right" /><p>MAKE YOUR FANDOM PLAYABLE</p><h2>비밀 서랍을 열고<br /><em>당신의 세계를 기록하세요.</em></h2><button type="button" onClick={() => resetBuilder("자캐 콘텐츠")}>새 기록 시작하기 →</button></section>
-
-      <footer><Logo /><p>취향과 자캐가 콘텐츠가 되는 비밀 아카이브</p><div><button type="button" onClick={() => setModal("library")}>내 보관함</button><a href="#top">맨 위로</a></div></footer>
-
-      <nav className="mobile-nav"><a href="#top"><span>⌂</span>홈</a><a href="#tournament"><span>♛</span>월드컵</a><button type="button" onClick={() => resetBuilder("월드컵")}><span>＋</span>만들기</button><button type="button" onClick={generatePrompt}><span>✎</span>소재</button><button type="button" onClick={() => setModal("library")}><span>▣</span>보관함</button></nav>
-
-      {modal && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setModal(null)}><section className={`modal ${modal}-modal`} role="dialog" aria-modal="true"><button className="modal-close" type="button" onClick={() => setModal(null)}>×</button>
-
-        {modal === "profile" && <div className="profile-panel"><div className="modal-title"><p>IDENTITY CARD</p><h2>내 프로필 만들기</h2><span>이 브라우저에서 사용할 아이디와 닉네임을 정해요.</span></div><div className="identity-card"><div className="identity-photo">♙</div><label>아이디<input value={profileId} onChange={(event) => setProfileId(event.target.value)} placeholder="영문·숫자·밑줄" /></label><label>사용자 닉네임<input value={nickname} onChange={(event) => setNickname(event.target.value)} placeholder="사이트에 표시할 이름" /></label><div className="identity-sign">OTAKU ARCHIVE MEMBER</div></div><button className="modal-primary" type="button" onClick={saveProfile}>{profile ? "프로필 수정하기" : "프로필 발급하기"} →</button></div>}
-
-        {modal === "creator" && <div className="creator-panel"><div className="modal-title"><p>CONTENT WORKROOM</p><h2>{kind} 만들기</h2><span>겉표지부터 실제 플레이 내용까지 한 번에 작성해요.</span></div><div className="kind-tabs">{portals.map((portal) => <button className={kind === portal.kind ? "active" : ""} type="button" key={portal.kind} onClick={() => changeKind(portal.kind)}>{portal.icon} {portal.kind}</button>)}</div><div className="basic-fields"><label>템플릿<select value={template} onChange={(event) => setTemplate(event.target.value)}>{templateOptions.map((item) => <option key={item}>{item}</option>)}</select></label><label>제목<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="콘텐츠 제목" /></label><label className="wide">소개<textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="참여자에게 보여줄 소개" /></label><label>테마<select value={theme} onChange={(event) => setTheme(event.target.value)}>{themes.map((item) => <option key={item}>{item}</option>)}</select></label><label className="cover-field">대표 표지<input ref={coverRef} type="file" accept="image/*" onChange={(event) => event.target.files?.[0] && fileToData(event.target.files[0], setCover)} /><span>{cover ? "표지 선택됨" : "이미지 선택"}</span></label></div>
-          {kind === "월드컵" && <div className="sub-builder"><div className="builder-title"><div><small>TOURNAMENT ENTRIES</small><h3>월드컵 참가자</h3></div><button type="button" onClick={() => setEntries((current) => [...current, newEntry(current.length + 1)])}>＋ 참가자 추가</button></div><div className="entry-grid">{entries.map((entry, index) => <article className="entry-editor" key={entry.id}><div className="entry-number">{String(index + 1).padStart(2,"0")}</div><label className="entry-image">{entry.image ? <img src={entry.image} alt="" /> : <span>＋ IMAGE</span>}<input type="file" accept="image/*" onChange={(event) => updateEntryImage(entry.id, event.target.files?.[0])} /></label><input value={entry.name} onChange={(event) => updateEntry(entry.id,"name",event.target.value)} placeholder="참가자 이름" /><textarea value={entry.description} onChange={(event) => updateEntry(entry.id,"description",event.target.value)} placeholder="설명·대사·태그" />{entries.length > 2 && <button type="button" onClick={() => setEntries((current) => current.filter((item) => item.id !== entry.id))}>삭제</button>}</article>)}</div></div>}
-          {kind === "테스트" && <div className="sub-builder"><div className="builder-title"><div><small>QUESTIONS & RESULTS</small><h3>질문과 선택지</h3></div><button type="button" onClick={() => setQuestions((current) => [...current, newQuestion(current.length + 1)])}>＋ 질문 추가</button></div><div className="question-list">{questions.map((question,index) => <article key={question.id}><i>Q{index+1}</i><input value={question.text} onChange={(event) => updateQuestion(question.id,"text",event.target.value)} placeholder="질문" /><div><input value={question.choiceA} onChange={(event) => updateQuestion(question.id,"choiceA",event.target.value)} placeholder="A 선택지" /><input value={question.choiceB} onChange={(event) => updateQuestion(question.id,"choiceB",event.target.value)} placeholder="B 선택지" /></div>{questions.length > 1 && <button type="button" onClick={() => setQuestions((current) => current.filter((item) => item.id !== question.id))}>질문 삭제</button>}</article>)}</div><div className="result-fields"><label>A가 많을 때 결과<input value={results.a} onChange={(event) => setResults({...results,a:event.target.value})} /></label><label>B가 많을 때 결과<input value={results.b} onChange={(event) => setResults({...results,b:event.target.value})} /></label></div></div>}
-          {kind === "자캐 콘텐츠" && <div className="oc-builder-note"><span>OC</span><div><b>{template}</b><p>자캐 콘텐츠의 세부 편집 항목은 선택한 템플릿에 맞춰 다음 단계에서 확장됩니다. 지금은 제목·소개·표지와 테마를 저장할 수 있어요.</p></div></div>}
-          <div className="modal-actions"><button type="button" onClick={() => setModal("preview")}>미리보기</button><button type="button" onClick={saveDraft}>보관함 저장</button><button className="modal-primary" type="button" onClick={() => kind === "월드컵" ? startWorldcup() : kind === "테스트" ? startTest() : setModal("preview")}>{kind === "월드컵" ? "대결 시작" : kind === "테스트" ? "테스트 풀기" : "완성 보기"} →</button></div></div>}
-
-        {modal === "preview" && <div className="preview-panel"><button className="back-edit" type="button" onClick={() => setModal("creator")}>← 편집으로</button><div className={`content-preview theme-${themes.indexOf(theme)}`}><div className="preview-cover">{cover ? <img src={cover} alt="콘텐츠 표지" /> : <span>{kind === "월드컵" ? "VS" : kind === "테스트" ? "✦" : "OC"}</span>}</div><div><small>{kind} / {template}</small><h2>{title || "제목을 입력해 주세요"}</h2><p>{description || "소개가 이곳에 표시됩니다."}</p>{kind === "월드컵" && <b>{entries.filter((entry) => entry.name.trim()).map((entry) => entry.name).join(" · ")}</b>}{kind === "테스트" && <b>{questions.length}개의 질문</b>}</div></div><div className="modal-actions"><button type="button" onClick={() => setModal("creator")}>계속 편집</button><button type="button" onClick={saveDraft}>보관함 저장</button><button className="modal-primary" type="button" onClick={() => kind === "월드컵" ? startWorldcup() : kind === "테스트" ? startTest() : notify("미리보기가 완성됐어요.")}>플레이 →</button></div></div>}
-
-        {modal === "worldcupPlay" && <div className="play-panel"><div className="modal-title"><p>LIVE TOURNAMENT</p><h2>{champion ? "최종 우승" : title || "월드컵 대결"}</h2><span>{champion ? "당신의 선택이 끝났어요." : "더 마음에 드는 쪽을 선택하세요."}</span></div>{champion ? <div className="champion-card">{champion.image ? <img src={champion.image} alt="우승자" /> : <span>♛</span>}<small>CHAMPION</small><h3>{champion.name}</h3><p>{champion.description}</p><button type="button" onClick={() => { void navigator.clipboard.writeText(`${title} 우승: ${champion.name}`); notify("우승 결과를 복사했어요."); }}>결과 복사</button></div> : <div className="match-grid">{tournamentQueue.slice(0,2).map((entry) => <button type="button" key={entry.id} onClick={() => chooseWinner(entry)}>{entry.image ? <img src={entry.image} alt={entry.name} /> : <span>{entry.name.slice(0,1)}</span>}<h3>{entry.name}</h3><p>{entry.description || "이 참가자를 선택하기"}</p></button>)}<i>VS</i></div>}</div>}
-
-        {modal === "testPlay" && <div className="play-panel"><div className="modal-title"><p>LIVE TEST</p><h2>{title || "취향 테스트"}</h2><span>{testResult ? "결과가 도착했어요." : `${testIndex+1} / ${questions.length}`}</span></div>{testResult ? <div className="test-result-card"><span>✦</span><small>YOUR RESULT</small><h3>{testResult}</h3><p>{description || "당신의 선택이 만든 결과예요."}</p><button type="button" onClick={() => { setTestIndex(0); setTestScore(0); setTestResult(""); }}>다시 풀기</button></div> : <div className="live-question"><i>QUESTION {testIndex+1}</i><h3>{questions[testIndex]?.text}</h3><button type="button" onClick={() => answerTest(1)}>A {questions[testIndex]?.choiceA}</button><button type="button" onClick={() => answerTest(0)}>B {questions[testIndex]?.choiceB}</button></div>}</div>}
-
-        {modal === "prompt" && <div className="prompt-panel"><div className="modal-title"><p>WRITING MATERIAL DRAW</p><h2>연성 소재 한 장</h2><span>마음에 들지 않으면 몇 번이든 다시 뽑을 수 있어요.</span></div>{promptResult && <div className="drawn-prompt"><div className="prompt-meta"><span>{promptResult.genre}</span><span>{promptResult.mood}</span></div><h3>{promptResult.relationship}</h3><p><b>장소</b>{promptResult.place}</p><p><b>사건</b>{promptResult.incident}</p><blockquote>{promptResult.line}</blockquote><div className="prompt-stamp">DRAWN<br />FOR YOU</div></div>}<div className="modal-actions"><button type="button" onClick={generatePrompt}>다시 뽑기 ↻</button><button className="modal-primary" type="button" onClick={() => void copyPrompt()}>소재 복사 →</button></div></div>}
-
-        {modal === "library" && <div className="library-panel"><div className="modal-title"><p>PRIVATE CABINET</p><h2>{profile ? `${profile.nickname}의 보관함` : "내 보관함"}</h2><span>이 브라우저에 저장한 콘텐츠 초안이에요.</span></div>{drafts.length ? <div className="draft-list">{drafts.map((draft) => <article key={draft.id}>{draft.cover ? <img src={draft.cover} alt="" /> : <span>{draft.kind === "월드컵" ? "VS" : draft.kind === "테스트" ? "✦" : "OC"}</span>}<div><small>{draft.kind} / {draft.template}</small><h3>{draft.title}</h3><p>{draft.description || "소개 없음"}</p></div><button type="button" onClick={() => loadDraft(draft)}>열기</button><button type="button" onClick={() => { const next=drafts.filter((item)=>item.id!==draft.id); setDrafts(next); window.localStorage.setItem(draftKey,JSON.stringify(next)); }}>삭제</button></article>)}</div> : <div className="empty-library"><span>□</span><h3>아직 보관한 기록이 없어요.</h3><p>월드컵이나 테스트를 만들어 첫 기록을 남겨보세요.</p><button type="button" onClick={() => resetBuilder("월드컵")}>새 콘텐츠 만들기</button></div>}</div>}
-      </section></div>}
-
-      {toast && <div className="toast" role="status">✦ {toast}</div>}
-    </main>
-  );
+    {modal && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setModal(null)}><section className={`modal ${modal}-modal`} role="dialog" aria-modal="true"><button className="modal-close" type="button" aria-label="닫기" onClick={() => setModal(null)}>×</button>
+      {modal === "account" && user && <div className="account-panel"><div className="account-avatar">{user.photoURL ? <img src={user.photoURL} alt="" referrerPolicy="no-referrer" /> : "G"}</div><span>GOOGLE ACCOUNT</span><h2>{user.displayName || "오타쿠놀이터 회원"}</h2><p>{user.email}</p><div><button type="button" onClick={() => setModal("library")}>내 보관함</button><button type="button" onClick={() => void logout()}>로그아웃</button></div></div>}
+      {modal === "loginHelp" && <div className="login-help"><span>GOOGLE LOGIN SETUP</span><h2>Firebase 연결이 필요해요</h2><p>이 버튼은 실제 Google OAuth 코드에 연결되어 있어요. Firebase 프로젝트 값을 입력하면 Google 계정 선택창이 열립니다.</p><ol><li>Firebase Console에서 웹 앱을 만들어요.</li><li>Authentication에서 Google 제공업체를 켜요.</li><li>Authorized domains에 <b>kkyareuk.github.io</b>를 추가해요.</li><li>저장소 Actions secrets에 README의 6개 값을 넣어요.</li></ol><button type="button" onClick={() => setModal(null)}>확인</button></div>}
+      {modal === "creator" && <div className="creator-panel"><div className="modal-heading"><span>CONTENT MAKER</span><h2>{kind} 만들기</h2><p>기본 정보와 실제 플레이 내용을 함께 설정해요.</p></div><div className="kind-tabs">{(["월드컵","테스트","자캐 콘텐츠"] as ContentKind[]).map((item) => <button key={item} className={kind === item ? "active" : ""} type="button" onClick={() => changeKind(item)}>{item}</button>)}</div><div className="basic-fields"><label>템플릿<select value={template} onChange={(event) => setTemplate(event.target.value)}>{templateOptions.map((item) => <option key={item}>{item}</option>)}</select></label><label>제목<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="콘텐츠 제목" /></label><label className="wide">소개<textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="참여자에게 보여줄 소개" /></label><label>컬러 테마<select value={theme} onChange={(event) => setTheme(event.target.value)}>{themes.map((item) => <option key={item}>{item}</option>)}</select></label><label className="file-field">대표 표지<input type="file" accept="image/*" onChange={(event) => event.target.files?.[0] && fileToData(event.target.files[0], setCover)} /><span>{cover ? "이미지 선택됨" : "이미지 선택"}</span></label></div>
+        {kind === "월드컵" && <div className="sub-builder"><div className="builder-heading"><div><span>ENTRIES</span><h3>월드컵 참가자</h3></div><button type="button" onClick={() => setEntries((items) => [...items, newWorldcupEntry(items.length + 1)])}>＋ 참가자 추가</button></div><div className="entry-grid">{entries.map((entry, index) => <article className="entry-editor" key={entry.id}><b>{index + 1}</b><label className="entry-image">{entry.image ? <img src={entry.image} alt="" /> : <span>이미지 추가</span>}<input type="file" accept="image/*" onChange={(event) => event.target.files?.[0] && fileToData(event.target.files[0], (image) => setEntries((items) => items.map((item) => item.id === entry.id ? { ...item, image } : item)))} /></label><input aria-label="참가자 이름" value={entry.name} onChange={(event) => updateEntry(entry.id, "name", event.target.value)} placeholder="참가자 이름" /><textarea aria-label="참가자 설명" value={entry.description} onChange={(event) => updateEntry(entry.id, "description", event.target.value)} placeholder="설명·대사·태그" />{entries.length > 2 && <button type="button" onClick={() => setEntries((items) => items.filter((item) => item.id !== entry.id))}>삭제</button>}</article>)}</div></div>}
+        {kind === "테스트" && <div className="sub-builder test-builder"><div className="test-mode"><div><b>계산 방식</b><p>이용자에게 점수와 변수는 보이지 않아요.</p></div><button type="button" className={testMode === "variable" ? "active" : ""} onClick={() => changeTestMode("variable")}><b>직접 변수형</b><small>A·B·C·D처럼 결과를 직접 만들기</small></button><button type="button" className={testMode === "mbti" ? "active" : ""} onClick={() => changeTestMode("mbti")}><b>MBTI형</b><small>E/I · S/N · T/F · J/P 계산</small></button></div>
+          {testMode === "variable" ? <div className="result-editor"><div className="builder-heading"><div><span>RESULT VARIABLES</span><h3>결과 변수</h3></div><button type="button" onClick={() => setResults((items) => [...items, { id: uid(), key: `R${items.length + 1}`, title: `결과 ${items.length + 1}`, description: "" }])}>＋ 결과 추가</button></div><p className="builder-guide">변수 이름은 제작자만 봐요. 각 선택지에서 이 변수에 숨은 점수를 줄 수 있습니다.</p><div className="result-grid">{results.map((result) => <article key={result.id}><input className="variable-key" aria-label="변수 이름" value={result.key} maxLength={4} onChange={(event) => setResults((items) => items.map((item) => item.id === result.id ? { ...item, key: event.target.value.toUpperCase() } : item))} /><input aria-label="결과 제목" value={result.title} onChange={(event) => setResults((items) => items.map((item) => item.id === result.id ? { ...item, title: event.target.value } : item))} /><textarea aria-label="결과 설명" value={result.description} onChange={(event) => setResults((items) => items.map((item) => item.id === result.id ? { ...item, description: event.target.value } : item))} placeholder="결과 설명" />{results.length > 2 && <button type="button" onClick={() => setResults((items) => items.filter((item) => item.id !== result.id))}>삭제</button>}</article>)}</div></div> : <div className="mbti-editor"><span>MBTI VARIABLES</span><h3>4개 성향 축 · 16개 결과</h3><div className="mbti-pairs"><b>E / I</b><b>S / N</b><b>T / F</b><b>J / P</b></div><details><summary>16개 결과 이름 편집</summary><div className="mbti-label-grid">{mbtiTypes.map((code) => <label key={code}><b>{code}</b><input value={mbtiLabels[code]} onChange={(event) => setMbtiLabels({ ...mbtiLabels, [code]: event.target.value })} /></label>)}</div></details></div>}
+          <div className="builder-heading question-heading"><div><span>QUESTIONS</span><h3>질문과 선택지</h3></div><button type="button" onClick={() => setQuestions((items) => [...items, newQuestion(testMode, items.length + 1)])}>＋ 질문 추가</button></div><div className="question-list">{questions.map((question, qIndex) => <article className="question-editor" key={question.id}><div className="question-top"><b>Q{qIndex + 1}</b><input aria-label="질문" value={question.text} onChange={(event) => updateQuestionText(question.id, event.target.value)} placeholder="질문을 입력하세요" />{questions.length > 1 && <button type="button" onClick={() => setQuestions((items) => items.filter((item) => item.id !== question.id))}>질문 삭제</button>}</div><div className="choice-list">{question.choices.map((choice, cIndex) => <div className="choice-editor" key={choice.id}><div className="choice-visible"><span>{cIndex + 1}</span><input aria-label={`선택지 ${cIndex + 1}`} value={choice.text} onChange={(event) => updateChoiceText(question.id, choice.id, event.target.value)} placeholder="이용자에게 보일 선택지" />{question.choices.length > 2 && <button type="button" onClick={() => removeChoice(question.id, choice.id)}>×</button>}</div><div className="score-box"><small>제작자만 보는 숨은 점수</small>{choice.links.map((link) => <div className="score-link" key={link.id}><select aria-label="연결 변수" value={link.variable} onChange={(event) => updateLink(question.id, choice.id, link.id, "variable", event.target.value)}>{variableOptions.map((variable) => <option key={variable}>{variable}</option>)}</select><span>＋</span><input aria-label="점수" type="number" min="-10" max="10" value={link.score} onChange={(event) => updateLink(question.id, choice.id, link.id, "score", Number(event.target.value))} /><b>점</b>{choice.links.length > 1 && <button type="button" onClick={() => removeLink(question.id, choice.id, link.id)}>삭제</button>}</div>)}<button type="button" onClick={() => addLink(question.id, choice.id)}>＋ 변수 하나 더 연결</button></div></div>)}</div><button className="add-choice" type="button" onClick={() => addChoice(question.id)}>＋ 선택지 추가</button></article>)}</div></div>}
+        {kind === "자캐 콘텐츠" && <div className="oc-note"><span>OC</span><div><h3>{template}</h3><p>자캐 이미지와 기본 정보를 등록하는 세부 편집기는 다음 단계에서 이 템플릿에 맞춰 연결됩니다.</p></div></div>}
+        <div className="modal-actions"><button type="button" onClick={() => setModal("preview")}>미리보기</button><button type="button" onClick={saveDraft}>보관함 저장</button><button className="primary" type="button" onClick={() => kind === "월드컵" ? startWorldcup() : kind === "테스트" ? startTest() : setModal("preview")}>{kind === "월드컵" ? "대결 시작" : kind === "테스트" ? "테스트 풀기" : "완성 보기"} →</button></div></div>}
+      {modal === "preview" && <div className="preview-panel"><button className="back-button" type="button" onClick={() => setModal("creator")}>← 편집으로</button><div className={`content-preview theme-${themes.indexOf(theme)}`}><div>{cover ? <img src={cover} alt="콘텐츠 표지" /> : <span>{kind === "월드컵" ? "VS" : kind === "테스트" ? "f(x)" : "OC"}</span>}</div><article><small>{kind} · {template}</small><h2>{title || "제목을 입력해 주세요"}</h2><p>{description || "소개가 이곳에 표시됩니다."}</p><b>{kind === "월드컵" ? `${entries.length}명의 참가자` : kind === "테스트" ? `${questions.length}개 질문 · ${testMode === "mbti" ? "MBTI형" : `${results.length}개 결과`}` : template}</b></article></div><div className="modal-actions"><button type="button" onClick={() => setModal("creator")}>계속 편집</button><button type="button" onClick={saveDraft}>보관함 저장</button><button className="primary" type="button" onClick={() => kind === "월드컵" ? startWorldcup() : kind === "테스트" ? startTest() : notify("미리보기가 완성됐어요.")}>플레이 →</button></div></div>}
+      {modal === "worldcupPlay" && <div className="play-panel"><div className="modal-heading"><span>LIVE WORLD CUP</span><h2>{champion ? "최종 우승" : title || "월드컵 대결"}</h2><p>{champion ? "당신의 선택이 끝났어요." : "더 마음에 드는 쪽을 선택하세요."}</p></div>{champion ? <div className="result-card">{champion.image ? <img src={champion.image} alt="우승자" /> : <span>🏆</span>}<small>CHAMPION</small><h3>{champion.name}</h3><p>{champion.description}</p><button type="button" onClick={() => { void navigator.clipboard.writeText(`${title} 우승: ${champion.name}`); notify("결과를 복사했어요."); }}>결과 복사</button></div> : <div className="match-grid">{tournamentQueue.slice(0,2).map((entry) => <button key={entry.id} type="button" onClick={() => chooseWinner(entry)}>{entry.image ? <img src={entry.image} alt={entry.name} /> : <span>{entry.name.slice(0,1)}</span>}<h3>{entry.name}</h3><p>{entry.description || "이 참가자를 선택하기"}</p></button>)}<i>VS</i></div>}</div>}
+      {modal === "testPlay" && <div className="play-panel"><div className="modal-heading"><span>LIVE TEST</span><h2>{title || "취향 테스트"}</h2><p>{testResult ? "결과가 도착했어요." : `${testIndex + 1} / ${questions.length}`}</p></div>{testResult ? <div className="result-card test-result"><span>{testResult.code}</span><small>YOUR RESULT</small><h3>{testResult.title}</h3><p>{testResult.description || description || "당신의 선택이 만든 결과예요."}</p><button type="button" onClick={() => { setTestIndex(0); setTestScores({}); setTestResult(null); }}>다시 풀기</button></div> : <div className="live-question"><small>QUESTION {testIndex + 1}</small><h3>{questions[testIndex]?.text}</h3>{questions[testIndex]?.choices.map((choice, index) => <button type="button" key={choice.id} onClick={() => answerTest(choice)}><span>{index + 1}</span>{choice.text}</button>)}</div>}</div>}
+      {modal === "prompt" && <div className="prompt-panel"><div className="modal-heading"><span>WRITING PROMPT</span><h2>연성 소재 한 장</h2><p>마음에 들지 않으면 몇 번이든 다시 뽑을 수 있어요.</p></div>{promptResult && <div className="drawn-prompt"><div><span>{promptResult.genre}</span><span>{promptResult.mood}</span></div><h3>{promptResult.relationship}</h3><p><b>장소</b>{promptResult.place}</p><p><b>사건</b>{promptResult.incident}</p><blockquote>{promptResult.line}</blockquote></div>}<div className="modal-actions"><button type="button" onClick={generatePrompt}>다시 뽑기 ↻</button><button className="primary" type="button" onClick={() => void copyPrompt()}>소재 복사 →</button></div></div>}
+      {modal === "library" && <div className="library-panel"><div className="modal-heading"><span>MY LIBRARY</span><h2>{user ? `${user.displayName || "나"}의 보관함` : "내 보관함"}</h2><p>{user ? "현재는 이 브라우저에 저장되며, 커뮤니티 DB 연결 후 계정 동기화됩니다." : "로그인 전에는 이 브라우저에만 저장돼요."}</p></div>{drafts.length ? <div className="draft-list">{drafts.map((draft) => <article key={draft.id}>{draft.cover ? <img src={draft.cover} alt="" /> : <span>{draft.kind === "월드컵" ? "VS" : draft.kind === "테스트" ? "f(x)" : "OC"}</span>}<div><small>{draft.kind} · {draft.template}</small><h3>{draft.title}</h3><p>{draft.description || "소개 없음"}</p></div><button type="button" onClick={() => loadDraft(draft)}>열기</button><button type="button" onClick={() => { const next = drafts.filter((item) => item.id !== draft.id); setDrafts(next); localStorage.setItem(draftKey, JSON.stringify(next)); }}>삭제</button></article>)}</div> : <div className="empty-state"><span>□</span><h3>아직 저장한 콘텐츠가 없어요.</h3><p>월드컵이나 테스트를 만들어 첫 기록을 남겨보세요.</p><button type="button" onClick={() => resetBuilder("테스트")}>새 콘텐츠 만들기</button></div>}</div>}
+    </section></div>}
+    {toast && <div className="toast" role="status">{toast}</div>}
+    {!firebaseConfigured && <div className="dev-note">Firebase 설정 전 · Google 로그인 준비됨</div>}
+  </main>;
 }
